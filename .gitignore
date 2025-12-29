@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Images générées
+*.png
+
+# TensorFlow
+*.h5
+*.pb
+checkpoints/
