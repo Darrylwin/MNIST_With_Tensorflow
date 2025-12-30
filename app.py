@@ -1,268 +1,403 @@
 """
-DÉMO MNIST - Version Simplifiée pour Présentation
-Groupe 11 - Big Data - Deep Learning
+Application Interactive MNIST avec Pygame
+Groupe 11 - Deep Learning Demo
 """
 
+import pygame
+import sys
+import os
+import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-import numpy as np
-import matplotlib.pyplot as plt
-import os
+from PIL import Image
+import threading
 
 # Désactiver les warnings TensorFlow
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-def afficher_titre(texte):
-    """Affiche un titre formaté"""
-    print("\n" + "="*70)
-    print(f"  {texte}")
-    print("="*70)
+# Initialisation Pygame
+pygame.init()
 
-def afficher_section(texte):
-    """Affiche une section"""
-    print(f"\n🔹 {texte}")
+# Constantes
+WINDOW_WIDTH = 1000
+WINDOW_HEIGHT = 700
+CANVAS_SIZE = 400
+FPS = 60
 
-# ============================================================================
-# DÉBUT DE LA DÉMO
-# ============================================================================
+# Couleurs stylées
+BG_COLOR = (15, 23, 42)          # Bleu foncé
+CANVAS_BG = (30, 41, 59)         # Gris bleu
+DRAW_COLOR = (255, 255, 255)     # Blanc
+BUTTON_COLOR = (59, 130, 246)    # Bleu vif
+BUTTON_HOVER = (96, 165, 250)    # Bleu plus clair
+TEXT_COLOR = (248, 250, 252)     # Blanc cassé
+SUCCESS_COLOR = (34, 197, 94)    # Vert
+WARNING_COLOR = (251, 146, 60)   # Orange
+PROGRESS_BG = (51, 65, 85)       # Gris foncé
+PROGRESS_FILL = (34, 197, 94)    # Vert
 
-afficher_titre("DÉMO MNIST - RECONNAISSANCE DE CHIFFRES MANUSCRITS")
-print("\n👥 Groupe 11 : DEGBEY, DOSSOU, DOUFFAN, LOGOSSOU")
-print("📚 Sujet : Deep Learning et Réseaux Neuronaux")
+# Police
+pygame.font.init()
+FONT_LARGE = pygame.font.Font(None, 48)
+FONT_MEDIUM = pygame.font.Font(None, 36)
+FONT_SMALL = pygame.font.Font(None, 28)
+FONT_TINY = pygame.font.Font(None, 20)
 
-input("\n▶️  Appuyez sur ENTRÉE pour commencer la démo...")
-
-# ============================================================================
-# ÉTAPE 1 : CHARGEMENT DES DONNÉES
-# ============================================================================
-
-afficher_section("ÉTAPE 1 : Chargement du dataset MNIST")
-print("   Le dataset MNIST contient 70,000 images de chiffres manuscrits (0-9)")
-
-(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-
-print(f"\n   ✅ Données chargées !")
-print(f"   📊 {x_train.shape[0]:,} images pour l'entraînement")
-print(f"   📊 {x_test.shape[0]:,} images pour le test")
-print(f"   📏 Taille de chaque image : {x_train.shape[1]}x{x_train.shape[2]} pixels")
-
-input("\n▶️  Appuyez sur ENTRÉE pour voir quelques exemples d'images...")
-
-# Afficher quelques exemples
-plt.figure(figsize=(12, 4))
-plt.suptitle("Exemples d'images du dataset MNIST", fontsize=14, fontweight='bold')
-for i in range(10):
-    plt.subplot(2, 5, i+1)
-    plt.imshow(x_train[i], cmap='gray')
-    plt.title(f"Chiffre : {y_train[i]}", fontsize=10)
-    plt.axis('off')
-plt.tight_layout()
-plt.savefig('1_exemples_mnist.png', dpi=150)
-print("\n   💾 Image sauvegardée : 1_exemples_mnist.png")
-plt.show(block=False)
-plt.pause(2)
-
-input("\n▶️  Appuyez sur ENTRÉE pour passer au prétraitement...")
-
-# ============================================================================
-# ÉTAPE 2 : PRÉTRAITEMENT
-# ============================================================================
-
-afficher_section("ÉTAPE 2 : Prétraitement des données")
-print("   Transformation nécessaire avant l'entraînement :")
-print("   1️⃣  Normalisation : pixels 0-255 → 0-1")
-print("   2️⃣  Aplatissement : images 28x28 → vecteurs de 784")
-
-# Normalisation
-x_train = x_train / 255.0
-x_test = x_test / 255.0
-
-# Aplatissement
-x_train_flat = x_train.reshape(-1, 784)
-x_test_flat = x_test.reshape(-1, 784)
-
-print(f"\n   ✅ Prétraitement terminé !")
-print(f"   📐 Nouvelle forme des données : {x_train_flat.shape}")
-
-input("\n▶️  Appuyez sur ENTRÉE pour construire le réseau de neurones...")
-
-# ============================================================================
-# ÉTAPE 3 : CONSTRUCTION DU MODÈLE
-# ============================================================================
-
-afficher_section("ÉTAPE 3 : Construction du réseau de neurones")
-print("   Architecture du modèle :")
-print("   🔴 Couche d'entrée : 784 neurones (28x28 pixels)")
-print("   🟠 Couche cachée 1 : 128 neurones + ReLU")
-print("   🟡 Dropout : 20% (évite le surapprentissage)")
-print("   🟢 Couche cachée 2 : 64 neurones + ReLU")
-print("   🔵 Couche de sortie : 10 neurones + Softmax (chiffres 0-9)")
-
-model = keras.Sequential([
-    keras.layers.Dense(128, activation='relu', input_shape=(784,)),
-    keras.layers.Dropout(0.2),
-    keras.layers.Dense(64, activation='relu'),
-    keras.layers.Dense(10, activation='softmax')
-])
-
-# Compilation
-model.compile(
-    optimizer='adam',
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-
-print("\n   ✅ Modèle créé et compilé !")
-print(f"   🧮 Paramètres à entraîner : {model.count_params():,}")
-
-input("\n▶️  Appuyez sur ENTRÉE pour lancer l'entraînement...")
-
-# ============================================================================
-# ÉTAPE 4 : ENTRAÎNEMENT
-# ============================================================================
-
-afficher_section("ÉTAPE 4 : Entraînement du modèle")
-print("   ⏱️  Cela prendra environ 1-2 minutes...")
-print("   📈 Suivez l'évolution de la précision (accuracy)\n")
-
-history = model.fit(
-    x_train_flat, 
-    y_train,
-    epochs=5,
-    batch_size=128,
-    validation_split=0.2,
-    verbose=1
-)
-
-print("\n   ✅ Entraînement terminé !")
-
-input("\n▶️  Appuyez sur ENTRÉE pour évaluer les performances...")
-
-# ============================================================================
-# ÉTAPE 5 : ÉVALUATION
-# ============================================================================
-
-afficher_section("ÉTAPE 5 : Évaluation sur les données de test")
-
-test_loss, test_accuracy = model.evaluate(x_test_flat, y_test, verbose=0)
-
-print(f"\n   🎯 RÉSULTATS FINAUX :")
-print(f"   {'─'*50}")
-print(f"   Précision (Accuracy) : {test_accuracy*100:.2f}%")
-print(f"   Perte (Loss)         : {test_loss:.4f}")
-print(f"   {'─'*50}")
-
-if test_accuracy > 0.97:
-    print("   🏆 Excellent résultat ! Le modèle est très performant.")
-elif test_accuracy > 0.95:
-    print("   ✨ Bon résultat ! Le modèle fonctionne bien.")
-else:
-    print("   ⚠️  Le modèle pourrait être amélioré.")
-
-input("\n▶️  Appuyez sur ENTRÉE pour voir les graphiques...")
-
-# Créer les graphiques
-plt.figure(figsize=(14, 5))
-
-# Graphique 1 : Précision
-plt.subplot(1, 2, 1)
-plt.plot(history.history['accuracy'], 'b-', label='Entraînement', linewidth=2)
-plt.plot(history.history['val_accuracy'], 'r-', label='Validation', linewidth=2)
-plt.title('Évolution de la Précision', fontsize=14, fontweight='bold')
-plt.xlabel('Époque', fontsize=12)
-plt.ylabel('Précision (%)', fontsize=12)
-plt.legend(fontsize=11)
-plt.grid(True, alpha=0.3)
-
-# Graphique 2 : Perte
-plt.subplot(1, 2, 2)
-plt.plot(history.history['loss'], 'b-', label='Entraînement', linewidth=2)
-plt.plot(history.history['val_loss'], 'r-', label='Validation', linewidth=2)
-plt.title('Évolution de la Perte', fontsize=14, fontweight='bold')
-plt.xlabel('Époque', fontsize=12)
-plt.ylabel('Perte', fontsize=12)
-plt.legend(fontsize=11)
-plt.grid(True, alpha=0.3)
-
-plt.tight_layout()
-plt.savefig('2_courbes_apprentissage.png', dpi=150)
-print("\n   💾 Graphiques sauvegardés : 2_courbes_apprentissage.png")
-plt.show(block=False)
-plt.pause(2)
-
-input("\n▶️  Appuyez sur ENTRÉE pour tester le modèle sur de nouvelles images...")
-
-# ============================================================================
-# ÉTAPE 6 : PRÉDICTIONS
-# ============================================================================
-
-afficher_section("ÉTAPE 6 : Test de prédiction")
-print("   Le modèle va maintenant prédire des chiffres qu'il n'a jamais vus\n")
-
-# Faire 10 prédictions aléatoires
-plt.figure(figsize=(15, 6))
-plt.suptitle("Prédictions du Modèle sur de Nouvelles Images", fontsize=14, fontweight='bold')
-
-correct = 0
-for i in range(10):
-    idx = np.random.randint(0, len(x_test))
-    image = x_test[idx]
-    prediction = model.predict(x_test_flat[idx:idx+1], verbose=0)
-    predicted_digit = np.argmax(prediction)
-    true_digit = y_test[idx]
-    confidence = prediction[0][predicted_digit] * 100
+class Button:
+    def __init__(self, x, y, width, height, text, color=BUTTON_COLOR):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.color = color
+        self.hover = False
+        
+    def draw(self, screen):
+        color = BUTTON_HOVER if self.hover else self.color
+        pygame.draw.rect(screen, color, self.rect, border_radius=10)
+        text_surf = FONT_SMALL.render(self.text, True, TEXT_COLOR)
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        screen.blit(text_surf, text_rect)
+        
+    def is_clicked(self, pos):
+        return self.rect.collidepoint(pos)
     
-    if predicted_digit == true_digit:
-        correct += 1
-        color = 'green'
-        status = "✓"
-    else:
-        color = 'red'
-        status = "✗"
+    def update_hover(self, pos):
+        self.hover = self.rect.collidepoint(pos)
+
+class MNISTApp:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption("MNIST Demo - Groupe 11")
+        self.clock = pygame.time.Clock()
+        
+        # États
+        self.state = "welcome"  # welcome, training, ready, predicting
+        self.running = True
+        
+        # Canvas de dessin
+        self.canvas = np.zeros((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8)
+        self.drawing = False
+        self.brush_size = 20
+        
+        # Modèle
+        self.model = None
+        self.x_train = None
+        self.y_train = None
+        self.x_test = None
+        self.y_test = None
+        
+        # Entraînement
+        self.training_progress = 0
+        self.training_epoch = 0
+        self.training_accuracy = 0
+        self.training_thread = None
+        
+        # Prédiction
+        self.prediction = None
+        self.confidence = 0
+        
+        # Boutons
+        self.setup_buttons()
+        
+    def setup_buttons(self):
+        center_x = WINDOW_WIDTH // 2
+        self.train_button = Button(center_x - 150, 400, 300, 60, 
+                                   "Entraîner le Modèle", SUCCESS_COLOR)
+        self.predict_button = Button(50, 550, 200, 50, "Prédire")
+        self.clear_button = Button(270, 550, 200, 50, "Effacer", WARNING_COLOR)
+        
+    def load_data(self):
+        """Charge le dataset MNIST"""
+        (self.x_train, self.y_train), (self.x_test, self.y_test) = keras.datasets.mnist.load_data()
+        self.x_train = self.x_train / 255.0
+        self.x_test = self.x_test / 255.0
+        
+    def create_model(self):
+        """Crée le réseau de neurones"""
+        model = keras.Sequential([
+            keras.layers.Dense(128, activation='relu', input_shape=(784,)),
+            keras.layers.Dropout(0.2),
+            keras.layers.Dense(64, activation='relu'),
+            keras.layers.Dense(10, activation='softmax')
+        ])
+        model.compile(
+            optimizer='adam',
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        return model
     
-    print(f"   {status} Test {i+1:2d} : Prédit = {predicted_digit}, Réel = {true_digit}, Confiance = {confidence:.1f}%")
+    def train_model_thread(self):
+        """Entraîne le modèle dans un thread séparé"""
+        self.state = "training"
+        self.load_data()
+        self.model = self.create_model()
+        
+        x_train_flat = self.x_train.reshape(-1, 784)
+        
+        # Callback personnalisé pour mettre à jour la progression
+        class ProgressCallback(keras.callbacks.Callback):
+            def __init__(self, app):
+                self.app = app
+                
+            def on_epoch_end(self, epoch, logs=None):
+                self.app.training_epoch = epoch + 1
+                self.app.training_progress = ((epoch + 1) / 5) * 100
+                self.app.training_accuracy = logs['accuracy'] * 100
+        
+        self.model.fit(
+            x_train_flat,
+            self.y_train,
+            epochs=5,
+            batch_size=128,
+            validation_split=0.2,
+            verbose=0,
+            callbacks=[ProgressCallback(self)]
+        )
+        
+        self.state = "ready"
     
-    plt.subplot(2, 5, i+1)
-    plt.imshow(image, cmap='gray')
-    plt.title(f'P:{predicted_digit} | R:{true_digit}\n{confidence:.0f}%', 
-              color=color, fontsize=10, fontweight='bold')
-    plt.axis('off')
+    def start_training(self):
+        """Lance l'entraînement dans un thread"""
+        if self.training_thread is None or not self.training_thread.is_alive():
+            self.training_thread = threading.Thread(target=self.train_model_thread)
+            self.training_thread.daemon = True
+            self.training_thread.start()
+    
+    def draw_on_canvas(self, pos):
+        """Dessine sur le canvas"""
+        canvas_x = 50
+        canvas_y = 100
+        
+        if canvas_x <= pos[0] <= canvas_x + CANVAS_SIZE and \
+           canvas_y <= pos[1] <= canvas_y + CANVAS_SIZE:
+            x = pos[0] - canvas_x
+            y = pos[1] - canvas_y
+            
+            # Dessiner un cercle épais
+            for i in range(-self.brush_size, self.brush_size):
+                for j in range(-self.brush_size, self.brush_size):
+                    if i*i + j*j <= self.brush_size * self.brush_size:
+                        px, py = x + i, y + j
+                        if 0 <= px < CANVAS_SIZE and 0 <= py < CANVAS_SIZE:
+                            self.canvas[py, px] = 255
+    
+    def clear_canvas(self):
+        """Efface le canvas"""
+        self.canvas = np.zeros((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8)
+        self.prediction = None
+        self.confidence = 0
+    
+    def predict_digit(self):
+        """Fait une prédiction sur le dessin"""
+        if self.model is None:
+            return
+        
+        # Redimensionner à 28x28
+        img = Image.fromarray(self.canvas)
+        img = img.resize((28, 28), Image.LANCZOS)
+        img_array = np.array(img) / 255.0
+        img_flat = img_array.reshape(1, 784)
+        
+        # Prédiction
+        prediction = self.model.predict(img_flat, verbose=0)
+        self.prediction = np.argmax(prediction)
+        self.confidence = prediction[0][self.prediction] * 100
+    
+    def draw_welcome(self):
+        """Écran d'accueil"""
+        self.screen.fill(BG_COLOR)
+        
+        # Titre
+        title = FONT_LARGE.render("MNIST - Deep Learning Demo", True, TEXT_COLOR)
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 150))
+        self.screen.blit(title, title_rect)
+        
+        # Sous-titre
+        subtitle = FONT_MEDIUM.render("Reconnaissance de Chiffres Manuscrits", True, (148, 163, 184))
+        subtitle_rect = subtitle.get_rect(center=(WINDOW_WIDTH // 2, 220))
+        self.screen.blit(subtitle, subtitle_rect)
+        
+        # Info groupe
+        group = FONT_SMALL.render("Groupe 11 : DEGBEY, DOSSOU, DOUFFAN, LOGOSSOU", True, (148, 163, 184))
+        group_rect = group.get_rect(center=(WINDOW_WIDTH // 2, 300))
+        self.screen.blit(group, group_rect)
+        
+        # Bouton d'entraînement
+        self.train_button.draw(self.screen)
+        
+        # Instructions
+        instructions = [
+            "1. Cliquez pour entraîner le modèle (~2 minutes)",
+            "2. Dessinez un chiffre avec la souris",
+            "3. Cliquez 'Prédire' pour voir le résultat"
+        ]
+        y = 500
+        for inst in instructions:
+            text = FONT_TINY.render(inst, True, (148, 163, 184))
+            text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, y))
+            self.screen.blit(text, text_rect)
+            y += 30
+    
+    def draw_training(self):
+        """Écran d'entraînement"""
+        self.screen.fill(BG_COLOR)
+        
+        # Titre
+        title = FONT_LARGE.render("Entraînement en cours...", True, TEXT_COLOR)
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 150))
+        self.screen.blit(title, title_rect)
+        
+        # Époque
+        epoch_text = FONT_MEDIUM.render(f"Époque {self.training_epoch}/5", True, (148, 163, 184))
+        epoch_rect = epoch_text.get_rect(center=(WINDOW_WIDTH // 2, 250))
+        self.screen.blit(epoch_text, epoch_rect)
+        
+        # Barre de progression
+        bar_width = 600
+        bar_height = 40
+        bar_x = (WINDOW_WIDTH - bar_width) // 2
+        bar_y = 320
+        
+        pygame.draw.rect(self.screen, PROGRESS_BG, (bar_x, bar_y, bar_width, bar_height), border_radius=20)
+        
+        if self.training_progress > 0:
+            fill_width = int((self.training_progress / 100) * bar_width)
+            pygame.draw.rect(self.screen, PROGRESS_FILL, (bar_x, bar_y, fill_width, bar_height), border_radius=20)
+        
+        # Pourcentage
+        percent = FONT_MEDIUM.render(f"{int(self.training_progress)}%", True, TEXT_COLOR)
+        percent_rect = percent.get_rect(center=(WINDOW_WIDTH // 2, bar_y + bar_height // 2))
+        self.screen.blit(percent, percent_rect)
+        
+        # Précision
+        if self.training_accuracy > 0:
+            acc_text = FONT_SMALL.render(f"Précision : {self.training_accuracy:.1f}%", True, SUCCESS_COLOR)
+            acc_rect = acc_text.get_rect(center=(WINDOW_WIDTH // 2, 420))
+            self.screen.blit(acc_text, acc_rect)
+        
+        # Info
+        info = FONT_TINY.render("Le modèle apprend à reconnaître les chiffres...", True, (148, 163, 184))
+        info_rect = info.get_rect(center=(WINDOW_WIDTH // 2, 500))
+        self.screen.blit(info, info_rect)
+    
+    def draw_ready(self):
+        """Écran de dessin et prédiction"""
+        self.screen.fill(BG_COLOR)
+        
+        # Titre
+        title = FONT_MEDIUM.render("Dessinez un chiffre", True, TEXT_COLOR)
+        self.screen.blit(title, (50, 30))
+        
+        # Canvas
+        canvas_surface = pygame.Surface((CANVAS_SIZE, CANVAS_SIZE))
+        canvas_surface.fill(CANVAS_BG)
+        
+        # Convertir le canvas numpy en surface Pygame
+        for y in range(CANVAS_SIZE):
+            for x in range(CANVAS_SIZE):
+                color = (self.canvas[y, x], self.canvas[y, x], self.canvas[y, x])
+                canvas_surface.set_at((x, y), color)
+        
+        self.screen.blit(canvas_surface, (50, 100))
+        
+        # Bordure du canvas
+        pygame.draw.rect(self.screen, (71, 85, 105), (50, 100, CANVAS_SIZE, CANVAS_SIZE), 3, border_radius=5)
+        
+        # Boutons
+        self.predict_button.draw(self.screen)
+        self.clear_button.draw(self.screen)
+        
+        # Zone de prédiction
+        pred_x = 550
+        pred_y = 100
+        
+        # Titre prédiction
+        pred_title = FONT_MEDIUM.render("Prédiction", True, TEXT_COLOR)
+        self.screen.blit(pred_title, (pred_x, pred_y))
+        
+        if self.prediction is not None:
+            # Carré de prédiction
+            pred_box_y = pred_y + 80
+            pygame.draw.rect(self.screen, CANVAS_BG, (pred_x, pred_box_y, 350, 200), border_radius=10)
+            
+            # Chiffre prédit
+            digit = FONT_LARGE.render(str(self.prediction), True, SUCCESS_COLOR)
+            digit_rect = digit.get_rect(center=(pred_x + 175, pred_box_y + 70))
+            self.screen.blit(digit, digit_rect)
+            
+            # Confiance
+            conf_text = FONT_SMALL.render(f"Confiance : {self.confidence:.1f}%", True, TEXT_COLOR)
+            conf_rect = conf_text.get_rect(center=(pred_x + 175, pred_box_y + 150))
+            self.screen.blit(conf_text, conf_rect)
+        else:
+            # Message
+            msg = FONT_SMALL.render("Dessinez puis cliquez 'Prédire'", True, (148, 163, 184))
+            self.screen.blit(msg, (pred_x, pred_y + 100))
+        
+        # Instructions
+        inst_y = 630
+        inst = FONT_TINY.render("Maintenez le bouton gauche de la souris pour dessiner", True, (148, 163, 184))
+        inst_rect = inst.get_rect(center=(WINDOW_WIDTH // 2, inst_y))
+        self.screen.blit(inst, inst_rect)
+    
+    def handle_events(self):
+        """Gère les événements"""
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Clic gauche
+                    if self.state == "welcome":
+                        if self.train_button.is_clicked(mouse_pos):
+                            self.start_training()
+                    
+                    elif self.state == "ready":
+                        if self.predict_button.is_clicked(mouse_pos):
+                            self.predict_digit()
+                        elif self.clear_button.is_clicked(mouse_pos):
+                            self.clear_canvas()
+                        else:
+                            self.drawing = True
+                            self.draw_on_canvas(mouse_pos)
+            
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    self.drawing = False
+            
+            elif event.type == pygame.MOUSEMOTION:
+                if self.state == "ready":
+                    if self.drawing:
+                        self.draw_on_canvas(mouse_pos)
+                    
+                    # Hover des boutons
+                    self.predict_button.update_hover(mouse_pos)
+                    self.clear_button.update_hover(mouse_pos)
+                
+                elif self.state == "welcome":
+                    self.train_button.update_hover(mouse_pos)
+    
+    def run(self):
+        """Boucle principale"""
+        while self.running:
+            self.handle_events()
+            
+            # Dessiner selon l'état
+            if self.state == "welcome":
+                self.draw_welcome()
+            elif self.state == "training":
+                self.draw_training()
+            elif self.state == "ready":
+                self.draw_ready()
+            
+            pygame.display.flip()
+            self.clock.tick(FPS)
+        
+        pygame.quit()
+        sys.exit()
 
-plt.tight_layout()
-plt.savefig('3_predictions.png', dpi=150)
-print(f"\n   💾 Prédictions sauvegardées : 3_predictions.png")
-print(f"   📊 Réussite : {correct}/10 prédictions correctes")
-plt.show(block=False)
-plt.pause(2)
-
-# ============================================================================
-# CONCLUSION
-# ============================================================================
-
-afficher_titre("CONCLUSION")
-print("""
-✅ Ce que nous avons démontré :
-
-1. 📥 Chargement et exploration d'un dataset réel (MNIST)
-2. 🔧 Prétraitement des données pour le deep learning
-3. 🧠 Construction d'un réseau de neurones avec plusieurs couches
-4. 🚀 Entraînement du modèle (apprentissage des patterns)
-5. 📊 Évaluation des performances (~98% de précision)
-6. 🔮 Utilisation du modèle pour faire des prédictions
-
-🎯 POINTS CLÉS :
-   • Un réseau simple avec 3 couches suffit pour atteindre 98% de précision
-   • Le modèle apprend automatiquement à reconnaître les chiffres
-   • L'entraînement prend quelques minutes sur un PC standard
-   • Le deep learning est accessible et pratique !
-
-📚 Ce modèle illustre les concepts fondamentaux du deep learning
-   que nous avons présentés dans notre exposé.
-""")
-
-afficher_titre("FIN DE LA DÉMO - MERCI !")
-print("\n👥 Groupe 11 : DEGBEY, DOSSOU, DOUFFAN, LOGOSSOU")
-print("📧 Questions ? N'hésitez pas !\n")
-
-input("▶️  Appuyez sur ENTRÉE pour fermer...")
-plt.close('all')
+if __name__ == "__main__":
+    app = MNISTApp()
+    app.run()
