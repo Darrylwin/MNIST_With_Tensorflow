@@ -11,9 +11,14 @@ import tensorflow as tf
 from tensorflow import keras
 from PIL import Image
 import threading
+import json
+import base64
 
 # Désactiver les warnings TensorFlow
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Fichier de sauvegarde des exemples
+LEARNING_DATA_FILE = "learned_examples.npz"
 
 # Initialisation Pygame
 pygame.init()
@@ -72,6 +77,7 @@ class MNISTApp:
         # États
         self.state = "welcome"  # welcome, training, ready, predicting
         self.running = True
+        self.show_digit_selection = False  # Pour afficher les boutons 0-9
         
         # Canvas de dessin (blanc = 255 pour correspondre à MNIST)
         self.canvas = np.ones((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8) * 255
@@ -100,6 +106,14 @@ class MNISTApp:
         # Prédiction
         self.prediction = None
         self.confidence = 0
+        self.waiting_feedback = False  # Attend le feedback de l'utilisateur
+        self.learning_examples = []  # Exemples pour l'apprentissage interactif
+        self.learning_count = 0  # Nombre d'exemples appris
+        self.current_drawing = None  # Dessin actuel pour le feedback
+        self.saved_examples_count = 0  # Exemples chargés depuis le fichier
+        
+        # Charger les exemples sauvegardés
+        self.load_learned_examples()
         
         # Boutons
         self.setup_buttons()
@@ -111,16 +125,32 @@ class MNISTApp:
         self.predict_button = Button(50, 550, 200, 50, "Prédire")
         self.clear_button = Button(270, 550, 200, 50, "Effacer", WARNING_COLOR)
         
+        # Boutons de feedback
+        self.correct_button = Button(550, 450, 160, 50, "✅ Correct", SUCCESS_COLOR)
+        self.wrong_button = Button(730, 450, 160, 50, "❌ Mauvais", WARNING_COLOR)
+        
+        # Boutons pour choisir le vrai chiffre (0-9)
+        self.digit_buttons = []
+        for i in range(10):
+            x = 550 + (i % 5) * 70
+            y = 520 if i < 5 else 580
+            self.digit_buttons.append(Button(x, y, 60, 50, str(i)))
+        
     def load_data(self):
         """Charge le dataset MNIST"""
         (self.x_train, self.y_train), (self.x_test, self.y_test) = keras.datasets.mnist.load_data()
         self.x_train = self.x_train / 255.0
         self.x_test = self.x_test / 255.0
         
-        # Sélectionner quelques images d'exemple à afficher
-        indices = np.random.choice(len(self.x_train), 9, replace=False)
-        self.sample_images = [(self.x_train[i] * 255).astype(np.uint8) for i in indices]
-        self.sample_labels = [self.y_train[i] for i in indices]
+        # Sélectionner UN exemple de CHAQUE chiffre (0-9) pour l'affichage
+        self.sample_images = []
+        self.sample_labels = []
+        
+        for digit in range(10):
+            # Trouver le premier exemple de ce chiffre
+            idx = np.where(self.y_train == digit)[0][0]
+            self.sample_images.append((self.x_train[idx] * 255).astype(np.uint8))
+            self.sample_labels.append(digit)
         
     def create_model(self):
         """Crée le réseau de neurones"""
@@ -144,6 +174,17 @@ class MNISTApp:
         self.model = self.create_model()
         
         x_train_flat = self.x_train.reshape(-1, 784)
+        y_train = self.y_train.copy()
+        
+        # Ajouter les exemples sauvegardés au dataset d'entraînement
+        if len(self.learning_examples) > 0:
+            learned_X = np.vstack([ex[0] for ex in self.learning_examples])
+            learned_y = np.array([ex[1] for ex in self.learning_examples])
+            
+            x_train_flat = np.vstack([x_train_flat, learned_X])
+            y_train = np.concatenate([y_train, learned_y])
+            
+            print(f"🔄 Ajout de {len(self.learning_examples)} exemples sauvegardés à l'entraînement")
         
         # Callback personnalisé pour mettre à jour la progression
         class ProgressCallback(keras.callbacks.Callback):
@@ -164,7 +205,7 @@ class MNISTApp:
         
         self.model.fit(
             x_train_flat,
-            self.y_train,
+            y_train,
             epochs=5,
             batch_size=128,
             validation_split=0.2,
@@ -204,6 +245,87 @@ class MNISTApp:
         self.canvas = np.ones((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8) * 255  # Blanc
         self.prediction = None
         self.confidence = 0
+        self.waiting_feedback = False
+        self.current_drawing = None
+    
+    def mark_correct(self):
+        """Marque la prédiction comme correcte"""
+        if self.current_drawing is not None and self.prediction is not None:
+            # Ajouter l'exemple aux données d'apprentissage
+            self.learning_examples.append((self.current_drawing, self.prediction))
+            self.learning_count += 1
+            self.waiting_feedback = False
+            
+            # Sauvegarder automatiquement
+            self.save_learned_examples()
+            
+            print(f"✅ Exemple confirmé : {self.prediction}")
+    
+    def mark_wrong(self, correct_digit):
+        """Marque la prédiction comme fausse et apprend le bon chiffre"""
+        if self.current_drawing is not None:
+            # Ajouter l'exemple avec le bon label
+            self.learning_examples.append((self.current_drawing, correct_digit))
+            self.learning_count += 1
+            
+            # Sauvegarder automatiquement
+            self.save_learned_examples()
+            
+            # Réentraîner rapidement sur les nouveaux exemples
+            if len(self.learning_examples) >= 1:
+                self.retrain_on_feedback()
+            
+            self.waiting_feedback = False
+            print(f"❌ Correction : {self.prediction} → {correct_digit}")
+    
+    def retrain_on_feedback(self):
+        """Réentraîne le modèle sur les exemples de feedback"""
+        if len(self.learning_examples) == 0:
+            return
+        
+        # Préparer les données
+        X = np.vstack([ex[0] for ex in self.learning_examples])
+        y = np.array([ex[1] for ex in self.learning_examples])
+        
+        # Réentraîner rapidement (1 époque avec les nouveaux exemples)
+        self.model.fit(X, y, epochs=1, batch_size=len(X), verbose=0)
+        
+        print(f"🔄 Modèle réentraîné sur {len(self.learning_examples)} exemples")
+    
+    def save_learned_examples(self):
+        """Sauvegarde les exemples appris dans un fichier"""
+        if len(self.learning_examples) == 0:
+            return
+        
+        try:
+            X = np.vstack([ex[0] for ex in self.learning_examples])
+            y = np.array([ex[1] for ex in self.learning_examples])
+            
+            np.savez(LEARNING_DATA_FILE, X=X, y=y)
+            print(f"💾 {len(self.learning_examples)} exemples sauvegardés")
+        except Exception as e:
+            print(f"❌ Erreur de sauvegarde : {e}")
+    
+    def load_learned_examples(self):
+        """Charge les exemples sauvegardés depuis le fichier"""
+        if not os.path.exists(LEARNING_DATA_FILE):
+            print("📂 Aucun exemple sauvegardé trouvé")
+            return
+        
+        try:
+            data = np.load(LEARNING_DATA_FILE)
+            X = data['X']
+            y = data['y']
+            
+            # Reconstruire la liste d'exemples
+            for i in range(len(X)):
+                self.learning_examples.append((X[i:i+1], y[i]))
+            
+            self.saved_examples_count = len(self.learning_examples)
+            self.learning_count = self.saved_examples_count
+            print(f"📚 {self.saved_examples_count} exemples chargés depuis les sessions précédentes")
+        except Exception as e:
+            print(f"❌ Erreur de chargement : {e}")
     
     def predict_digit(self):
         """Fait une prédiction sur le dessin"""
@@ -256,10 +378,16 @@ class MNISTApp:
         img_array = np.array(final_img) / 255.0
         img_flat = img_array.reshape(1, 784)
         
+        # Sauvegarder le dessin actuel pour le feedback
+        self.current_drawing = img_flat.copy()
+        
         # Prédiction
         prediction = self.model.predict(img_flat, verbose=0)
         self.prediction = np.argmax(prediction)
         self.confidence = prediction[0][self.prediction] * 100
+        
+        # Activer le mode feedback
+        self.waiting_feedback = True
     
     def draw_welcome(self):
         """Écran d'accueil"""
@@ -307,18 +435,18 @@ class MNISTApp:
         
         # === PARTIE GAUCHE : Images d'exemple ===
         if self.sample_images:
-            sample_title = FONT_SMALL.render("Exemples du dataset", True, (148, 163, 184))
+            sample_title = FONT_SMALL.render("Exemples d'entraînement (0-9)", True, (148, 163, 184))
             self.screen.blit(sample_title, (50, 120))
             
-            # Grille 3x3 d'images
+            # Grille 2x5 d'images (tous les chiffres 0-9)
             img_size = 60
             spacing = 10
             start_x = 50
             start_y = 160
             
-            for idx in range(9):
-                row = idx // 3
-                col = idx % 3
+            for idx in range(10):
+                row = idx // 2
+                col = idx % 2
                 x = start_x + col * (img_size + spacing)
                 y = start_y + row * (img_size + spacing)
                 
@@ -342,6 +470,12 @@ class MNISTApp:
                 label_text = FONT_TINY.render(str(self.sample_labels[idx]), True, SUCCESS_COLOR)
                 label_rect = label_text.get_rect(center=(x + img_size // 2, y + img_size + 15))
                 self.screen.blit(label_text, label_rect)
+            
+            # Info sur les exemples sauvegardés
+            if self.saved_examples_count > 0:
+                saved_info = FONT_TINY.render(f"+ {self.saved_examples_count} exemples des sessions précédentes", True, (148, 163, 184))
+                # Décale l'affichage plus bas (ajuste la valeur de y ici)
+                self.screen.blit(saved_info, (50, start_y + 400))
         
         # === PARTIE DROITE : Informations d'entraînement ===
         info_x = 350
@@ -466,9 +600,20 @@ class MNISTApp:
         # Bordure du canvas
         pygame.draw.rect(self.screen, (71, 85, 105), (50, 100, CANVAS_SIZE, CANVAS_SIZE), 3, border_radius=5)
         
-        # Boutons
+        # Boutons de base
         self.predict_button.draw(self.screen)
         self.clear_button.draw(self.screen)
+        
+        # Compteur d'exemples appris
+        count_y = 630
+        if self.learning_count > 0:
+            count_text = FONT_TINY.render(f"📚 {self.learning_count} exemples appris", True, SUCCESS_COLOR)
+            self.screen.blit(count_text, (50, count_y))
+            
+            # Afficher le nombre d'exemples chargés si applicable
+            if self.saved_examples_count > 0:
+                saved_text = FONT_TINY.render(f"({self.saved_examples_count} depuis sessions précédentes)", True, (148, 163, 184))
+                self.screen.blit(saved_text, (50, count_y + 20))
         
         # Zone de prédiction
         pred_x = 550
@@ -492,14 +637,32 @@ class MNISTApp:
             conf_text = FONT_SMALL.render(f"Confiance : {self.confidence:.1f}%", True, TEXT_COLOR)
             conf_rect = conf_text.get_rect(center=(pred_x + 175, pred_box_y + 150))
             self.screen.blit(conf_text, conf_rect)
+            
+            # Boutons de feedback
+            if self.waiting_feedback:
+                # Titre feedback
+                feedback_title = FONT_SMALL.render("Est-ce correct ?", True, TEXT_COLOR)
+                self.screen.blit(feedback_title, (pred_x, 350))
+                
+                # Boutons Correct / Mauvais
+                self.correct_button.draw(self.screen)
+                self.wrong_button.draw(self.screen)
+                
+                # Si on a cliqué sur "Mauvais", afficher les chiffres 0-9
+                if hasattr(self, 'show_digit_selection') and self.show_digit_selection:                    
+                    for btn in self.digit_buttons:
+                        btn.draw(self.screen)
         else:
             # Message
             msg = FONT_SMALL.render("Dessinez puis cliquez 'Prédire'", True, (148, 163, 184))
             self.screen.blit(msg, (pred_x, pred_y + 100))
         
         # Instructions
-        inst_y = 630
-        inst = FONT_TINY.render("Maintenez le bouton gauche de la souris pour dessiner", True, (148, 163, 184))
+        inst_y = 660
+        if not self.waiting_feedback:
+            inst = FONT_TINY.render("Maintenez le bouton gauche de la souris pour dessiner", True, (148, 163, 184))
+        else:
+            inst = FONT_TINY.render("Donnez votre feedback pour améliorer le modèle !", True, (148, 163, 184))
         inst_rect = inst.get_rect(center=(WINDOW_WIDTH // 2, inst_y))
         self.screen.blit(inst, inst_rect)
     
@@ -518,13 +681,33 @@ class MNISTApp:
                             self.start_training()
                     
                     elif self.state == "ready":
-                        if self.predict_button.is_clicked(mouse_pos):
-                            self.predict_digit()
-                        elif self.clear_button.is_clicked(mouse_pos):
-                            self.clear_canvas()
+                        # Boutons de feedback
+                        if self.waiting_feedback:
+                            if self.correct_button.is_clicked(mouse_pos):
+                                self.mark_correct()
+                                self.clear_canvas()
+                                self.show_digit_selection = False
+                            elif self.wrong_button.is_clicked(mouse_pos):
+                                # Afficher les boutons de sélection
+                                self.show_digit_selection = True
+                            elif self.show_digit_selection:
+                                # Vérifier les boutons de chiffres
+                                for i, btn in enumerate(self.digit_buttons):
+                                    if btn.is_clicked(mouse_pos):
+                                        self.mark_wrong(i)
+                                        self.clear_canvas()
+                                        self.show_digit_selection = False
+                                        break
                         else:
-                            self.drawing = True
-                            self.draw_on_canvas(mouse_pos)
+                            # Boutons normaux
+                            if self.predict_button.is_clicked(mouse_pos):
+                                self.predict_digit()
+                            elif self.clear_button.is_clicked(mouse_pos):
+                                self.clear_canvas()
+                                self.show_digit_selection = False
+                            else:
+                                self.drawing = True
+                                self.draw_on_canvas(mouse_pos)
             
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
@@ -532,12 +715,19 @@ class MNISTApp:
             
             elif event.type == pygame.MOUSEMOTION:
                 if self.state == "ready":
-                    if self.drawing:
+                    if self.drawing and not self.waiting_feedback:
                         self.draw_on_canvas(mouse_pos)
                     
                     # Hover des boutons
-                    self.predict_button.update_hover(mouse_pos)
-                    self.clear_button.update_hover(mouse_pos)
+                    if not self.waiting_feedback:
+                        self.predict_button.update_hover(mouse_pos)
+                        self.clear_button.update_hover(mouse_pos)
+                    else:
+                        self.correct_button.update_hover(mouse_pos)
+                        self.wrong_button.update_hover(mouse_pos)
+                        if self.show_digit_selection:
+                            for btn in self.digit_buttons:
+                                btn.update_hover(mouse_pos)
                 
                 elif self.state == "welcome":
                     self.train_button.update_hover(mouse_pos)

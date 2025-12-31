@@ -11,3 +11,4 @@ venv/
 *.h5
 *.pb
 checkpoints/
+*.npz
