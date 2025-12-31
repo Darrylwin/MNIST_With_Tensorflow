@@ -26,8 +26,8 @@ FPS = 60
 
 # Couleurs stylées
 BG_COLOR = (15, 23, 42)          # Bleu foncé
-CANVAS_BG = (30, 41, 59)         # Gris bleu
-DRAW_COLOR = (255, 255, 255)     # Blanc
+CANVAS_BG = (255, 255, 255)      # Blanc (comme MNIST)
+DRAW_COLOR = (0, 0, 0)           # Noir pour dessiner
 BUTTON_COLOR = (59, 130, 246)    # Bleu vif
 BUTTON_HOVER = (96, 165, 250)    # Bleu plus clair
 TEXT_COLOR = (248, 250, 252)     # Blanc cassé
@@ -73,10 +73,10 @@ class MNISTApp:
         self.state = "welcome"  # welcome, training, ready, predicting
         self.running = True
         
-        # Canvas de dessin
-        self.canvas = np.zeros((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8)
+        # Canvas de dessin (blanc = 255 pour correspondre à MNIST)
+        self.canvas = np.ones((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8) * 255
         self.drawing = False
-        self.brush_size = 20
+        self.brush_size = 8  # Pinceau plus fin
         
         # Modèle
         self.model = None
@@ -89,7 +89,13 @@ class MNISTApp:
         self.training_progress = 0
         self.training_epoch = 0
         self.training_accuracy = 0
+        self.training_loss = 0
+        self.val_accuracy = 0
         self.training_thread = None
+        self.history_accuracy = []
+        self.history_val_accuracy = []
+        self.history_loss = []
+        self.sample_images = None  # Images d'exemple pour l'entraînement
         
         # Prédiction
         self.prediction = None
@@ -110,6 +116,11 @@ class MNISTApp:
         (self.x_train, self.y_train), (self.x_test, self.y_test) = keras.datasets.mnist.load_data()
         self.x_train = self.x_train / 255.0
         self.x_test = self.x_test / 255.0
+        
+        # Sélectionner quelques images d'exemple à afficher
+        indices = np.random.choice(len(self.x_train), 9, replace=False)
+        self.sample_images = [(self.x_train[i] * 255).astype(np.uint8) for i in indices]
+        self.sample_labels = [self.y_train[i] for i in indices]
         
     def create_model(self):
         """Crée le réseau de neurones"""
@@ -143,6 +154,13 @@ class MNISTApp:
                 self.app.training_epoch = epoch + 1
                 self.app.training_progress = ((epoch + 1) / 5) * 100
                 self.app.training_accuracy = logs['accuracy'] * 100
+                self.app.training_loss = logs['loss']
+                self.app.val_accuracy = logs.get('val_accuracy', 0) * 100
+                
+                # Stocker l'historique pour les graphiques
+                self.app.history_accuracy.append(logs['accuracy'] * 100)
+                self.app.history_val_accuracy.append(logs.get('val_accuracy', 0) * 100)
+                self.app.history_loss.append(logs['loss'])
         
         self.model.fit(
             x_train_flat,
@@ -173,17 +191,17 @@ class MNISTApp:
             x = pos[0] - canvas_x
             y = pos[1] - canvas_y
             
-            # Dessiner un cercle épais
+            # Dessiner un cercle noir (0 = noir comme MNIST)
             for i in range(-self.brush_size, self.brush_size):
                 for j in range(-self.brush_size, self.brush_size):
                     if i*i + j*j <= self.brush_size * self.brush_size:
                         px, py = x + i, y + j
                         if 0 <= px < CANVAS_SIZE and 0 <= py < CANVAS_SIZE:
-                            self.canvas[py, px] = 255
+                            self.canvas[py, px] = 0  # Noir
     
     def clear_canvas(self):
         """Efface le canvas"""
-        self.canvas = np.zeros((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8)
+        self.canvas = np.ones((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8) * 255  # Blanc
         self.prediction = None
         self.confidence = 0
     
@@ -192,10 +210,50 @@ class MNISTApp:
         if self.model is None:
             return
         
-        # Redimensionner à 28x28
-        img = Image.fromarray(self.canvas)
-        img = img.resize((28, 28), Image.LANCZOS)
-        img_array = np.array(img) / 255.0
+        # Inverser les couleurs (MNIST = blanc sur noir, nous avons noir sur blanc)
+        inverted = 255 - self.canvas
+        
+        # Trouver la bounding box du dessin pour le centrer
+        coords = np.column_stack(np.where(inverted > 0))
+        if len(coords) == 0:
+            return  # Rien n'est dessiné
+        
+        # Obtenir les limites
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        
+        # Ajouter une marge
+        margin = 20
+        y_min = max(0, y_min - margin)
+        x_min = max(0, x_min - margin)
+        y_max = min(CANVAS_SIZE, y_max + margin)
+        x_max = min(CANVAS_SIZE, x_max + margin)
+        
+        # Extraire et centrer
+        cropped = inverted[y_min:y_max, x_min:x_max]
+        
+        # Créer une image 28x28 avec le dessin centré
+        img = Image.fromarray(cropped)
+        
+        # Redimensionner en gardant le ratio
+        width, height = img.size
+        if width > height:
+            new_width = 20
+            new_height = int(20 * height / width)
+        else:
+            new_height = 20
+            new_width = int(20 * width / height)
+        
+        img = img.resize((new_width, new_height), Image.LANCZOS)
+        
+        # Créer une image 28x28 noire et coller le dessin au centre
+        final_img = Image.new('L', (28, 28), 0)
+        paste_x = (28 - new_width) // 2
+        paste_y = (28 - new_height) // 2
+        final_img.paste(img, (paste_x, paste_y))
+        
+        # Normaliser et prédire
+        img_array = np.array(final_img) / 255.0
         img_flat = img_array.reshape(1, 784)
         
         # Prédiction
@@ -244,19 +302,59 @@ class MNISTApp:
         
         # Titre
         title = FONT_LARGE.render("Entraînement en cours...", True, TEXT_COLOR)
-        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 150))
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 50))
         self.screen.blit(title, title_rect)
         
+        # === PARTIE GAUCHE : Images d'exemple ===
+        if self.sample_images:
+            sample_title = FONT_SMALL.render("Exemples du dataset", True, (148, 163, 184))
+            self.screen.blit(sample_title, (50, 120))
+            
+            # Grille 3x3 d'images
+            img_size = 60
+            spacing = 10
+            start_x = 50
+            start_y = 160
+            
+            for idx in range(9):
+                row = idx // 3
+                col = idx % 3
+                x = start_x + col * (img_size + spacing)
+                y = start_y + row * (img_size + spacing)
+                
+                # Créer une surface pour l'image
+                img_surface = pygame.Surface((img_size, img_size))
+                
+                # Redimensionner l'image 28x28 vers 60x60
+                img_array = self.sample_images[idx]
+                img_resized = np.repeat(np.repeat(img_array, img_size//28, axis=0), img_size//28, axis=1)
+                
+                # Dessiner l'image
+                for py in range(img_size):
+                    for px in range(img_size):
+                        if py < len(img_resized) and px < len(img_resized[0]):
+                            gray = img_resized[py, px]
+                            img_surface.set_at((px, py), (gray, gray, gray))
+                
+                self.screen.blit(img_surface, (x, y))
+                
+                # Label
+                label_text = FONT_TINY.render(str(self.sample_labels[idx]), True, SUCCESS_COLOR)
+                label_rect = label_text.get_rect(center=(x + img_size // 2, y + img_size + 15))
+                self.screen.blit(label_text, label_rect)
+        
+        # === PARTIE DROITE : Informations d'entraînement ===
+        info_x = 350
+        
         # Époque
-        epoch_text = FONT_MEDIUM.render(f"Époque {self.training_epoch}/5", True, (148, 163, 184))
-        epoch_rect = epoch_text.get_rect(center=(WINDOW_WIDTH // 2, 250))
-        self.screen.blit(epoch_text, epoch_rect)
+        epoch_text = FONT_MEDIUM.render(f"Époque {self.training_epoch}/5", True, TEXT_COLOR)
+        self.screen.blit(epoch_text, (info_x, 120))
         
         # Barre de progression
-        bar_width = 600
-        bar_height = 40
-        bar_x = (WINDOW_WIDTH - bar_width) // 2
-        bar_y = 320
+        bar_width = 550
+        bar_height = 35
+        bar_x = info_x
+        bar_y = 180
         
         pygame.draw.rect(self.screen, PROGRESS_BG, (bar_x, bar_y, bar_width, bar_height), border_radius=20)
         
@@ -265,20 +363,85 @@ class MNISTApp:
             pygame.draw.rect(self.screen, PROGRESS_FILL, (bar_x, bar_y, fill_width, bar_height), border_radius=20)
         
         # Pourcentage
-        percent = FONT_MEDIUM.render(f"{int(self.training_progress)}%", True, TEXT_COLOR)
-        percent_rect = percent.get_rect(center=(WINDOW_WIDTH // 2, bar_y + bar_height // 2))
+        percent = FONT_SMALL.render(f"{int(self.training_progress)}%", True, TEXT_COLOR)
+        percent_rect = percent.get_rect(center=(bar_x + bar_width // 2, bar_y + bar_height // 2))
         self.screen.blit(percent, percent_rect)
         
-        # Précision
+        # Métriques
+        metrics_y = 250
         if self.training_accuracy > 0:
-            acc_text = FONT_SMALL.render(f"Précision : {self.training_accuracy:.1f}%", True, SUCCESS_COLOR)
-            acc_rect = acc_text.get_rect(center=(WINDOW_WIDTH // 2, 420))
-            self.screen.blit(acc_text, acc_rect)
+            acc_text = FONT_SMALL.render(f"Précision entraînement : {self.training_accuracy:.2f}%", True, SUCCESS_COLOR)
+            self.screen.blit(acc_text, (info_x, metrics_y))
+            
+            val_text = FONT_SMALL.render(f"Précision validation : {self.val_accuracy:.2f}%", True, (59, 130, 246))
+            self.screen.blit(val_text, (info_x, metrics_y + 35))
+            
+            loss_text = FONT_SMALL.render(f"Perte : {self.training_loss:.4f}", True, WARNING_COLOR)
+            self.screen.blit(loss_text, (info_x, metrics_y + 70))
         
-        # Info
-        info = FONT_TINY.render("Le modèle apprend à reconnaître les chiffres...", True, (148, 163, 184))
-        info_rect = info.get_rect(center=(WINDOW_WIDTH // 2, 500))
-        self.screen.blit(info, info_rect)
+        # === GRAPHIQUES EN TEMPS RÉEL ===
+        if len(self.history_accuracy) > 0:
+            graph_y = 380
+            graph_width = 550
+            graph_height = 250
+            
+            # Fond du graphique
+            pygame.draw.rect(self.screen, (30, 41, 59), (info_x, graph_y, graph_width, graph_height), border_radius=10)
+            
+            # Titre du graphique
+            graph_title = FONT_SMALL.render("Évolution de la précision", True, TEXT_COLOR)
+            self.screen.blit(graph_title, (info_x + 10, graph_y + 10))
+            
+            # Dessiner les axes
+            axis_margin = 40
+            plot_x = info_x + axis_margin
+            plot_y = graph_y + 50
+            plot_width = graph_width - axis_margin - 20
+            plot_height = graph_height - 70
+            
+            # Axe horizontal et vertical
+            pygame.draw.line(self.screen, (100, 116, 139), (plot_x, plot_y + plot_height), 
+                           (plot_x + plot_width, plot_y + plot_height), 2)
+            pygame.draw.line(self.screen, (100, 116, 139), (plot_x, plot_y), 
+                           (plot_x, plot_y + plot_height), 2)
+            
+            # Labels des axes
+            label_0 = FONT_TINY.render("0%", True, (148, 163, 184))
+            self.screen.blit(label_0, (plot_x - 30, plot_y + plot_height - 8))
+            label_100 = FONT_TINY.render("100%", True, (148, 163, 184))
+            self.screen.blit(label_100, (plot_x - 35, plot_y - 8))
+            
+            # Dessiner les courbes
+            if len(self.history_accuracy) > 1:
+                # Courbe d'entraînement (vert)
+                points_train = []
+                for i, acc in enumerate(self.history_accuracy):
+                    x = plot_x + (i / (5 - 1)) * plot_width
+                    y = plot_y + plot_height - (acc / 100) * plot_height
+                    points_train.append((x, y))
+                
+                if len(points_train) >= 2:
+                    pygame.draw.lines(self.screen, SUCCESS_COLOR, False, points_train, 3)
+                
+                # Courbe de validation (bleu)
+                points_val = []
+                for i, acc in enumerate(self.history_val_accuracy):
+                    x = plot_x + (i / (5 - 1)) * plot_width
+                    y = plot_y + plot_height - (acc / 100) * plot_height
+                    points_val.append((x, y))
+                
+                if len(points_val) >= 2:
+                    pygame.draw.lines(self.screen, (59, 130, 246), False, points_val, 3)
+            
+            # Légende
+            legend_y = graph_y + graph_height - 25
+            pygame.draw.line(self.screen, SUCCESS_COLOR, (info_x + 20, legend_y), (info_x + 50, legend_y), 3)
+            legend_train = FONT_TINY.render("Entraînement", True, TEXT_COLOR)
+            self.screen.blit(legend_train, (info_x + 55, legend_y - 8))
+            
+            pygame.draw.line(self.screen, (59, 130, 246), (info_x + 170, legend_y), (info_x + 200, legend_y), 3)
+            legend_val = FONT_TINY.render("Validation", True, TEXT_COLOR)
+            self.screen.blit(legend_val, (info_x + 205, legend_y - 8))
     
     def draw_ready(self):
         """Écran de dessin et prédiction"""
